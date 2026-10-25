@@ -23,13 +23,27 @@
   const page = document.getElementById('page');
   let currentUrl = null;
 
-  function loadHtml(name, html) {
+  function showUrl(name, url) {
     if (currentUrl) URL.revokeObjectURL(currentUrl);
-    currentUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    currentUrl = url;
     page.src = currentUrl;
     page.style.display = 'block';
     picker.style.display = 'none';
     document.title = name;
+  }
+
+  function loadHtml(name, html) {
+    showUrl(name, URL.createObjectURL(new Blob([html], { type: 'text/html' })));
+  }
+
+  function readText(file) {
+    if (typeof file.text === 'function') return file.text();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('Could not read this HTML file.'));
+      reader.readAsText(file);
+    });
   }
 
   async function loadZip(file) {
@@ -55,7 +69,7 @@
     const urls = new Map();
     await Promise.all(entries.map(async entry => {
       const data = await entry.async('blob');
-      urls.set(entry.name.replaceAll('\\\\', '/'), URL.createObjectURL(data));
+      urls.set(entry.name.replace(/\\\\/g, '/'), URL.createObjectURL(data));
     }));
     const root = htmlEntry.name.slice(0, htmlEntry.name.lastIndexOf('/') + 1);
     let html = await htmlEntry.async('string');
@@ -83,7 +97,9 @@
       if (/\.zip$/i.test(file.name) || file.type === 'application/zip') {
         await loadZip(file);
       } else {
-        loadHtml(file.name, await file.text());
+        // Keep the original file as a URL. This works in older iOS HTML
+        // viewers that do not implement File.text().
+        showUrl(file.name, URL.createObjectURL(file));
       }
     } catch (error) {
       picker.value = '';
