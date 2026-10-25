@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#000000">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0b0f'/%3E%3Cpath d='M17 9h22l12 12v34H17z' fill='%23f4f7ff'/%3E%3Cpath d='M39 9v14h12' fill='%23b9c9ff'/%3E%3Cpath d='M25 35h18M25 43h14' stroke='%235b76ff' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
 <title>HTML Viewer</title>
 <style>
   * { box-sizing: border-box; }
@@ -14,7 +15,7 @@
 </style>
 </head>
 <body>
-<input id="open" type="file" accept=".html,.htm,text/html" aria-label="Choose an HTML file">
+<input id="open" type="file" accept=".html,.htm,.zip,text/html,application/zip" aria-label="Choose an HTML file or ZIP web app">
 <iframe id="page" title="HTML document" allow="fullscreen; autoplay; clipboard-read; clipboard-write" allowfullscreen></iframe>
 <script>
 (() => {
@@ -22,15 +23,72 @@
   const page = document.getElementById('page');
   let currentUrl = null;
 
-  picker.addEventListener('change', () => {
-    const file = picker.files && picker.files[0];
-    if (!file) return;
+  function loadHtml(name, html) {
     if (currentUrl) URL.revokeObjectURL(currentUrl);
-    currentUrl = URL.createObjectURL(file);
+    currentUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
     page.src = currentUrl;
     page.style.display = 'block';
     picker.style.display = 'none';
-    document.title = file.name;
+    document.title = name;
+  }
+
+  async function loadZip(file) {
+    // JSZip is loaded only when a ZIP is selected, keeping normal HTML use tiny.
+    if (!window.JSZip) {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('Could not load ZIP support.'));
+        document.head.appendChild(script);
+      });
+    }
+
+    const zip = await JSZip.loadAsync(file);
+    const entries = Object.values(zip.files).filter(entry => !entry.dir);
+    const htmlEntry = entries.find(entry => /(^|\/)index\.html?$/i.test(entry.name))
+      || entries.find(entry => /\.html?$/i.test(entry.name));
+    if (!htmlEntry) throw new Error('This ZIP does not contain an HTML entry file.');
+
+    // Convert local files to blob URLs and rewrite common HTML asset links so
+    // CSS, JavaScript, images, fonts, and media continue working in the iframe.
+    const urls = new Map();
+    await Promise.all(entries.map(async entry => {
+      const data = await entry.async('blob');
+      urls.set(entry.name.replaceAll('\\\\', '/'), URL.createObjectURL(data));
+    }));
+    const root = htmlEntry.name.slice(0, htmlEntry.name.lastIndexOf('/') + 1);
+    let html = await htmlEntry.async('string');
+    html = html.replace(/(src|href|poster)=(['"])(?!https?:|data:|blob:|#)([^'"?]+)(\?[^'"]*)?\2/gi,
+      (all, attr, quote, path, query = '') => {
+        const clean = path.replace(/^\.\//, '');
+        const target = clean.startsWith('/') ? clean.slice(1) : root + clean;
+        const url = urls.get(target) || urls.get(path.replace(/^\.\//, ''));
+        return url ? `${attr}=${quote}${url}${query}${quote}` : all;
+      });
+    html = html.replace(/url\((['"]?)(?!https?:|data:|blob:)([^)'"?#]+)([^)]*)\)/gi,
+      (all, quote, path, tail) => {
+        const clean = path.replace(/^\.\//, '');
+        const target = root + clean;
+        const url = urls.get(target) || urls.get(clean);
+        return url ? `url(${quote}${url}${tail})` : all;
+      });
+    loadHtml(file.name, html);
+  }
+
+  picker.addEventListener('change', async () => {
+    const file = picker.files && picker.files[0];
+    if (!file) return;
+    try {
+      if (/\.zip$/i.test(file.name) || file.type === 'application/zip') {
+        await loadZip(file);
+      } else {
+        loadHtml(file.name, await file.text());
+      }
+    } catch (error) {
+      picker.value = '';
+      alert(error.message || 'Could not open this file.');
+    }
   });
 
   // Keep the app from being exited with an in-page Back action. Reloading the
