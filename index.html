@@ -22,13 +22,58 @@
   const picker = document.getElementById('open');
   const page = document.getElementById('page');
   let currentUrl = null;
+  const cacheDbName = 'html-viewer-cache';
+
+  function orientationAngle() {
+    return typeof screen.orientation?.angle === 'number'
+      ? screen.orientation.angle
+      : (typeof window.orientation === 'number' ? window.orientation : 0);
+  }
+
+  function cacheFile(file) {
+    return file.arrayBuffer().then(bytes => new Promise((resolve, reject) => {
+      const request = indexedDB.open(cacheDbName, 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('files');
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const tx = request.result.transaction('files', 'readwrite');
+        tx.objectStore('files').put({ name: file.name, type: file.type, bytes, angle: orientationAngle() }, 'last');
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      };
+    }));
+  }
+
+  function restoreCachedFile() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(cacheDbName, 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('files');
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const tx = request.result.transaction('files', 'readonly');
+        const read = tx.objectStore('files').get('last');
+        read.onsuccess = () => {
+          const saved = read.result;
+          // A same-orientation reload is treated as an intentional reset.
+          // A different orientation usually means the iOS viewer recreated the
+          // page while rotating, so restore the app in that case.
+          resolve(saved && saved.angle !== orientationAngle()
+            ? new File([saved.bytes], saved.name, { type: saved.type })
+            : null);
+        };
+        read.onerror = () => reject(read.error);
+      };
+    });
+  }
 
   function showUrl(name, url) {
     if (currentUrl) URL.revokeObjectURL(currentUrl);
     currentUrl = url;
     page.src = currentUrl;
     page.style.display = 'block';
-    picker.style.display = 'none';
+    // Remove the chooser entirely after the first successful load. The loaded
+    // web app then owns the whole page and cannot trigger another file prompt.
+    picker.remove();
     document.title = name;
   }
 
@@ -90,8 +135,7 @@
     loadHtml(file.name, html);
   }
 
-  picker.addEventListener('change', async () => {
-    const file = picker.files && picker.files[0];
+  async function openSelectedFile(file) {
     if (!file) return;
     try {
       if (/\.zip$/i.test(file.name) || file.type === 'application/zip') {
@@ -101,10 +145,27 @@
         // viewers that do not implement File.text().
         showUrl(file.name, URL.createObjectURL(file));
       }
+      // Caching is optional; the app should still open in viewers without
+      // IndexedDB or File.arrayBuffer support.
+      await cacheFile(file).catch(() => {});
     } catch (error) {
       picker.value = '';
       alert(error.message || 'Could not open this file.');
     }
+  }
+
+  picker.addEventListener('change', () => {
+    openSelectedFile(picker.files && picker.files[0]);
+  });
+
+  // Some iOS HTML viewers recreate the page during rotation. Restore the
+  // current file before showing the chooser so rotation does not interrupt it.
+  picker.style.display = 'none';
+  restoreCachedFile().then(file => {
+    if (file) openSelectedFile(file);
+    else picker.style.display = 'block';
+  }).catch(() => {
+    picker.style.display = 'block';
   });
 
   // Keep the app from being exited with an in-page Back action. Reloading the
