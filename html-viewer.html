@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>HTML Viewer</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width:100%; height:100%; margin:0; overflow:hidden; background:#000; }
+  body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  #open { position:fixed; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; }
+  #page { display:none; position:fixed; inset:0; width:100%; height:100%; border:0; background:#000; }
+</style>
+</head>
+<body>
+<input id="open" type="file" accept=".html,.htm,text/html" aria-label="Choose an HTML file">
+<iframe id="page" title="HTML document" allow="fullscreen; autoplay; clipboard-read; clipboard-write" allowfullscreen></iframe>
+<script>
+(() => {
+  const picker = document.getElementById('open');
+  const page = document.getElementById('page');
+  let currentUrl = null;
+
+  picker.addEventListener('change', () => {
+    const file = picker.files && picker.files[0];
+    if (!file) return;
+    if (currentUrl) URL.revokeObjectURL(currentUrl);
+    currentUrl = URL.createObjectURL(file);
+    page.src = currentUrl;
+    page.style.display = 'block';
+    picker.style.display = 'none';
+    document.title = file.name;
+  });
+
+  // Keep the app from being exited with an in-page Back action. Reloading the
+  // viewer clears the selected document and returns to the system file picker.
+  history.replaceState({ viewer: true }, '');
+  history.pushState({ viewer: true }, '');
+  window.addEventListener('popstate', () => history.pushState({ viewer: true }, ''));
+})();
+</script>
+</body>
+</html>
